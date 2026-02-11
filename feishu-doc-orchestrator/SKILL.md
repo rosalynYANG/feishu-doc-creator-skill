@@ -9,11 +9,14 @@ description: 飞书文档创建主编排技能 - 将 Markdown 文件转换为飞
 
 ### 命令行使用
 ```bash
-# 创建文档
+# 创建文档（自动生成时间戳目录）
 python scripts/orchestrator.py input.md "文档标题"
 
 # 使用默认标题（文件名）
 python scripts/orchestrator.py input.md
+
+# 指定运行名称
+python scripts/orchestrator.py input.md "文档标题" "test-run-01"
 ```
 
 ### 作为技能使用
@@ -62,14 +65,14 @@ python scripts/orchestrator.py input.md
 input.md
     ↓
 [feishu-md-parser]
-    ↓ workflow/step1_parse/blocks.json
+    ↓ workflow/feishu-doc-runs/run-2026-02-10-143022/step1_parse/blocks.json
 [feishu-doc-creator-with-permission] ⭐ 创建+权限原子操作
-    ↓ workflow/step2_create_with_permission/doc_with_permission.json
-    ├─→ [feishu-block-adder] → workflow/step3_add_blocks/add_result.json
-    └─→ [feishu-doc-verifier] → workflow/step4_verify/verify_result.json
+    ↓ workflow/feishu-doc-runs/run-2026-02-10-143022/step2_create_with_permission/doc_with_permission.json
+    ├─→ [feishu-block-adder] → workflow/feishu-doc-runs/run-2026-02-10-143022/step3_add_blocks/add_result.json
+    └─→ [feishu-doc-verifier] → workflow/feishu-doc-runs/run-2026-02-10-143022/step4_verify/verify_result.json
 [feishu-logger]
     ↓
-CREATED_DOCS.md + created_docs.json
+workflow/feishu-logs/CREATED_DOCS.md + created_docs.json
 ```
 
 ## 关键设计原则
@@ -93,26 +96,40 @@ CREATED_DOCS.md + created_docs.json
 
 ## 工作流目录结构
 
+### 项目根目录下的新结构
 ```
-workflow/
-├── step1_parse/
-│   ├── blocks.json       # 解析后的块数据
-│   └── metadata.json     # 解析元数据
-├── step2_create_with_permission/
-│   └── doc_with_permission.json  # 文档信息+权限状态 ⭐
-├── step3_add_blocks/
-│   └── add_result.json   # 块添加结果
-└── step4_verify/
-    └── verify_result.json      # 验证结果
+项目根目录/
+└── workflow/
+    ├── feishu-doc-runs/           # 所有运行记录（每次运行独立子文件夹）
+    │   ├── run-2026-02-10-143022/
+    │   │   ├── step1_parse/
+    │   │   │   ├── blocks.json       # 解析后的块数据
+    │   │   │   └── metadata.json     # 解析元数据
+    │   │   ├── step2_create_with_permission/
+    │   │   │   └── doc_with_permission.json  # 文档信息+权限状态 ⭐
+    │   │   ├── step3_add_blocks/
+    │   │   │   └── add_result.json   # 块添加结果
+    │   │   └── step4_verify/
+    │   │       └── verify_result.json      # 验证结果
+    │   ├── run-2026-02-10-150845/
+    │   └── run-2026-02-10-161233/
+    └── feishu-logs/               # 汇总日志文件
+        ├── CREATED_DOCS.md        # Markdown 格式的创建日志
+        └── created_docs.json      # JSON 格式的创建日志
 ```
+
+### 关键改进
+- **每次运行独立子文件夹**：使用时间戳命名（`run-YYYY-MM-DD-HHMMSS`），避免相互污染
+- **工作流数据与技能目录分离**：所有运行数据存储在项目 `workflow/` 目录下
+- **可自定义运行名称**：可以指定有意义的运行名称，如 `test-run-01`、`demo-01` 等
 
 ## 输出结果
 
 成功完成后，你会得到：
 1. **文档 URL**：可直接访问的飞书文档链接
-2. **CREATED_DOCS.md**：Markdown 格式的创建日志
-3. **created_docs.json**：JSON 格式的创建日志
-4. **workflow/**：完整的中间结果，可追溯每一步
+2. **workflow/feishu-logs/CREATED_DOCS.md**：Markdown 格式的创建日志
+3. **workflow/feishu-logs/created_docs.json**：JSON 格式的创建日志
+4. **workflow/feishu-doc-runs/run-YYYY-MM-DD-HHMMSS/**：本次运行的完整中间结果，可追溯每一步
 
 ## 配置要求
 
@@ -140,16 +157,23 @@ FEISHU_AUTO_COLLABORATOR_ID = "ou_xxx"
 如果某一步失败，可以手动修改中间结果后继续：
 ```
 # 第2步创建+权限失败，手动重新执行
-python .claude/skills/feishu-doc-creator-with-permission/scripts/doc_creator_with_permission.py "文档标题" workflow/step2_create_with_permission
+python .claude/skills/feishu-doc-creator-with-permission/scripts/doc_creator_with_permission.py "文档标题" workflow/feishu-doc-runs/run-2026-02-10-143022/step2_create_with_permission
 ```
 
 ## 常见问题
 
 ### Q1: 某一步失败了怎么办？
-A: 查看 `workflow/stepX_*/` 目录下的 JSON 文件，可以手动修复后继续下一步。
+A: 查看 `workflow/feishu-doc-runs/run-YYYY-MM-DD-HHMMSS/stepX_*/` 目录下的 JSON 文件，可以手动修复后继续下一步。
 
 ### Q2: 如何只执行某一步？
 A: 直接调用对应的子技能脚本，传入正确的文件路径。
+
+### Q3: 工作流数据存储在哪里？
+A: 所有工作流数据存储在项目的 `workflow/` 目录下：
+- `workflow/feishu-doc-runs/` - 每次运行的独立子文件夹
+- `workflow/feishu-logs/` - 汇总的日志文件
+
+这样不会污染 skills 目录。
 
 ### Q3: Token 节省效果如何？
 A: 文件传递方式比内容传递节省约 60-80% 的 Token。

@@ -158,3 +158,153 @@ if "background_color" not in returned_callout:
 - 代码注释：第 130-178 行
 - 问题排查：`../feishu-doc-orchestrator/TROUBLESHOOTING.md`
 - 测试脚本：`../feishu-doc-orchestrator/test_callout_only.py`
+
+---
+
+## ⭐ 最佳实践：表格创建使用 Descendant API
+
+### 关键发现
+
+经过测试验证，飞书官方推荐的 `descendant` API 是创建表格的最可靠方式。
+
+### 问题背景
+
+旧的两步法创建表格容易失败：
+1. 先创建表格框架（block_type 31）
+2. 再逐个填充单元格内容
+
+这种方式的问题：
+- 小表格（8行以下）可能成功
+- 大表格（10行以上）经常返回 `invalid param` 错误
+- 单元格内容可能丢失
+
+### 解决方案：使用 Descendant API
+
+**API 端点**：
+```
+POST /open-apis/docx/v1/documents/{document_id}/blocks/{document_id}/descendant
+```
+
+**关键点**：
+```python
+{
+    "index": -1,
+    "children_id": [table_id],           # 只包含顶层块
+    "descendants": [                       # 包含所有块
+        {
+            "block_id": table_id,
+            "block_type": 31,              # 表格块
+            "table": {"property": {...}},
+            "children": [cell_ids]         # 引用单元格
+        },
+        {
+            "block_id": cell_id,
+            "block_type": 32,              # 单元格块
+            "table_cell": {},
+            "children": [content_id]      # 引用内容块
+        },
+        {
+            "block_id": content_id,
+            "block_type": 2,               # 文本块
+            "text": {"elements": [...]},
+            "children": []
+        }
+    ]
+}
+```
+
+### 测试结果
+
+| 表格大小 | 旧方法 | Descendant API |
+|---------|--------|----------------|
+| 8行 × 6列 | ✅ | ✅ |
+| 11行 × 5列 | ❌ invalid param | ✅ |
+| 20行 × 10列 | ❌ 失败 | ✅ |
+
+### 代码实现
+
+在 `scripts/block_adder.py` 第 66-157 行：
+
+```python
+def create_table_with_style(token, config, document_id, rows_data):
+    """
+    创建表格并填充内容 - 使用 descendant API
+
+    根据飞书官方规范，使用 /descendant 端点一次性创建表格和所有单元格
+
+    关键点：
+    1. children_id 只包含直接添加到文档的块（table_id）
+    2. descendants 包含所有块的详细信息（表格、单元格、单元格内容）
+    3. 表格的 children 引用单元格的 block_id
+    4. 单元格的 children 引用内容块的 block_id
+    """
+    import uuid
+
+    row_size = len(rows_data)
+    col_size = len(rows_data[0]) if rows_data else 0
+
+    # 生成唯一的 block_id
+    table_id = f"table_{uuid.uuid4().hex[:16]}"
+    cell_ids = [f"cell_{uuid.uuid4().hex[:16]}" for _ in range(row_size * col_size)]
+    content_ids = [f"content_{uuid.uuid4().hex[:16]}" for _ in range(row_size * col_size)]
+
+    # 构建完整的 descendants 列表
+    descendants = []
+
+    # 1. 添加表格块
+    descendants.append({
+        "block_id": table_id,
+        "block_type": 31,
+        "table": {"property": {"row_size": row_size, "column_size": col_size}},
+        "children": cell_ids
+    })
+
+    # 2. 添加所有单元格块和内容块
+    for i, (cell_id, content_id) in enumerate(zip(cell_ids, content_ids)):
+        row_idx, col_idx = i // col_size, i % col_size
+        cell_content = clean_cell_content(rows_data[row_idx][col_idx])
+
+        # 单元格块
+        descendants.append({
+            "block_id": cell_id,
+            "block_type": 32,
+            "table_cell": {},
+            "children": [content_id]
+        })
+
+        # 内容块
+        descendants.append({
+            "block_id": content_id,
+            "block_type": 2,
+            "text": {"elements": [{"text_run": {"content": cell_content}}]},
+            "children": []
+        })
+
+    # 发送请求
+    url = f"{config['FEISHU_API_DOMAIN']}/open-apis/docx/v1/documents/{document_id}/blocks/{document_id}/descendant"
+    response = requests.post(url, json={
+        "index": -1,
+        "children_id": [table_id],
+        "descendants": descendants
+    }, headers={"Authorization": f"Bearer {token}"})
+
+    return table_id
+```
+
+### 块添加顺序策略
+
+为避免块位置混乱，采用顺序添加策略：
+
+```python
+# ✅ 正确：逐块添加，保持原始顺序
+for i, block in enumerate(blocks):
+    if block.get("type") == "table":
+        create_table_with_descendant_api(...)  # 表格使用专门API
+    else:
+        add_children_to_block(..., [block])     # 其他块正常添加
+    time.sleep(0.05)  # 控制速率
+```
+
+### 相关文档
+- 问题排查：`../feishu-doc-orchestrator/TROUBLESHOOTING.md`
+- 主文档：`../feishu-doc-orchestrator/README.md`

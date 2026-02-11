@@ -1,159 +1,124 @@
-# 飞书文档创建技能 - 安装说明
+# 飞书文档创建技能包 (Feishu Document Skills)
 
-将 Markdown 文件转换为飞书文档，支持25种飞书文档块类型。
+将 Markdown 文件转换为飞书文档的完整技能包。
 
-## 环境要求
+## 功能
 
-- Python 3.8+
-- pip（Python包管理器）
+- ✅ Markdown 解析为飞书文档格式（支持 25 种块类型）
+- ✅ 自动文档创建 + 权限管理（添加协作者 + 转移所有权）
+- ✅ 智能 Token 模式选择
+- ✅ 分批添加内容块
+- ✅ Playwright 文档验证（自动保存登录状态）
+- ✅ 完整的日志记录
 
-## 安装步骤
+## 包含的技能
 
-### 1. 克隆或下载技能包
+| 技能 | 说明 |
+|-----|------|
+| `feishu-md-parser` | Markdown 解析器 |
+| `feishu-doc-creator-with-permission` | 文档创建 + 权限管理 |
+| `feishu-block-adder` | 块添加器 |
+| `feishu-doc-verifier` | 文档验证器 |
+| `feishu-logger` | 日志记录器 |
+| `feishu-doc-orchestrator` | 主编排器 |
+
+## 快速开始
+
+### 1. 安装依赖
 
 ```bash
-# 将技能包放到项目目录
-# .claude/skills/feishu-doc-creator-skill/
+pip install playwright requests lark-oapi
+playwright install chromium
 ```
 
-### 2. 安装依赖
+### 2. 配置飞书应用
+
+复制配置模板并填写凭证：
 
 ```bash
-pip install requests lark-oapi playwright
+cp feishu-config.env.template .claude/feishu-config.env
 ```
 
-### 3. 配置飞书应用
+编辑 `.claude/feishu-config.env`，填写你的飞书应用凭证：
 
-#### 3.1 创建飞书应用
-
-1. 访问 [飞书开放平台](https://open.feishu.cn/)
-2. 创建自建应用
-3. 获取 `App ID` 和 `App Secret`
-
-#### 3.2 配置文件
-
-复制配置模板：
-```bash
-cp .claude/skills/feishu-doc-creator-skill/feishu-config.env.template .claude/feishu-config.env
-```
-
-编辑 `.claude/feishu-config.env`，填入真实值：
 ```ini
-FEISHU_APP_ID = "cli_xxx"
-FEISHU_APP_SECRET = "xxxxxxxx"
+FEISHU_APP_ID = "cli_xxxxxxxxxxxxx"
+FEISHU_APP_SECRET = "xxxxxxxxxxxxxxxxxx"
+FEISHU_API_DOMAIN = "https://open.feishu.cn"
+FEISHU_AUTO_COLLABORATOR_ID = "ou_xxxxxxxxxxxxxxxx"
 ```
 
-### 4. 验证配置
+### 3. OAuth 授权
 
 ```bash
-python .claude/skills/feishu-doc-creator-skill/feishu-doc-creator-skill/scripts/check_config.py
+python skills/feishu-doc-creator-with-permission/scripts/auto_auth.py
 ```
 
-应该看到：
-```
-[OK] FEISHU_APP_ID: cli_xxx...
-[OK] FEISHU_APP_SECRET: xxxxxxxx...
-[OK] API连接正常
-配置检查通过！
-```
+使用飞书 APP 扫码登录即可。
 
-## 使用方法
-
-### 在 Claude Code 中使用
-
-```
-请帮我将 docs/example.md 转换为飞书文档
-```
-
-### 命令行使用
+### 4. 创建文档
 
 ```bash
-python .claude/skills/feishu-doc-creator-skill/feishu-doc-creator-skill/scripts/orchestrator.py docs/example.md "文档标题"
+python skills/feishu-doc-orchestrator/scripts/orchestrator.py input.md "文档标题"
 ```
 
-## 技能结构
+## 工作流程
 
 ```
-claude/skills/
-├── feishu-doc-creator-skill/        # 主编排技能
-├── feishu-md-parser/               # Markdown解析
-├── feishu-doc-creator-with-permission/  # 文档创建+权限
-├── feishu-block-adder/             # 块添加
-├── feishu-doc-verifier/            # 文档验证
-└── feishu-logger/                  # 日志记录
+input.md
+    ↓
+[1. Markdown 解析] → blocks.json
+    ↓
+[2. 文档创建 + 权限管理] → doc_with_permission.json
+    ↓
+[3. 块添加] → add_result.json
+    ↓
+[4. 文档验证] → verify_result.json
+    ↓
+[5. 日志记录] → CREATED_DOCS.md
 ```
 
-## 支持的块类型
+## 配置说明
 
-- **基础文本（11种）**：text, heading1-9, quote_container
-- **列表（4种）**：bullet, ordered, todo, task
-- **特殊块（5种）**：code, quote, callout, divider, image
-- **AI块（1种）**：ai_template
-- **高级块（5种）**：bitable, grid, sheet, table, board
+| 配置项 | 必填 | 说明 |
+|-------|-----|------|
+| `FEISHU_APP_ID` | ✅ | 飞书应用 ID |
+| `FEISHU_APP_SECRET` | ✅ | 飞书应用密钥 |
+| `FEISHU_API_DOMAIN` | ❌ | API 地址，默认 `https://open.feishu.cn` |
+| `FEISHU_AUTO_COLLABORATOR_ID` | 推荐 | 你的飞书用户 ID |
 
-**总计：25种块类型**
+## 获取飞书应用凭证
 
-## 高级块使用说明
+1. 访问 [飞书开放平台](https://open.feishu.cn/app)
+2. 创建自建应用
+3. 获取 App ID 和 App Secret
+4. 申请权限：
+   - `drive:drive` - 云文档
+   - `docs:doc` - 查看文档
+   - `docx:document` - 创建和编辑
+   - `docs:permission.member:create` - 协作者管理
 
-### 高亮块（Callout）
+## 工具脚本
 
-```markdown
-:::info
-信息提示
-:::
+| 脚本 | 说明 |
+|-----|------|
+| `check_config.py` | 检查配置是否正确 |
+| `auto_auth.py` | OAuth 自动授权 |
+| `orchestrator.py` | 主编排脚本 |
 
-:::warning
-警告提示
-:::
-```
-
-### 多维表格（Bitable）
-
-用于创建结构化数据表格。
-
-### 分栏（Grid）
-
-将内容分成2-5列。
-
-### 画板（Board）
-
-用于绘图和白板协作。
-
-## 测试
+## 检查配置
 
 ```bash
-# 测试所有25种块类型
-python .claude/skills/feishu-doc-creator-skill/feishu-doc-creator-skill/scripts/test_all_25_blocks.py
+python skills/feishu-doc-orchestrator/scripts/check_config.py
 ```
 
-## 常见问题
+## 系统要求
 
-### Q: 配置检查失败？
+- Python >= 3.8
+- playwright >= 1.40.0
+- requests >= 2.31.0
+- lark-oapi >= 1.2.0
 
-A: 请检查 `.claude/feishu-config.env` 文件是否正确配置，确保 APP_ID 和 APP_SECRET 正确。
-
-### Q: 无法创建文档？
-
-A:
-1. 确认配置文件已正确设置
-2. 运行配置检查工具验证
-3. 检查网络连接
-
-### Q: 权限问题？
-
-A: 技能会自动处理权限，确保配置了 `FEISHU_AUTO_COLLABORATOR_ID`。
-
-## 隐私数据
-
-⚠️ **重要**：
-- 配置文件 `feishu-config.env` 包含敏感信息，已加入 .gitignore
-- 请勿将个人配置文件提交到 Git
-- 分享项目前请删除或使用配置模板
-
-## 开源协议
+## 许可证
 
 MIT License
-
-## 支持
-
-如有问题，请提交 Issue 或 Pull Request。

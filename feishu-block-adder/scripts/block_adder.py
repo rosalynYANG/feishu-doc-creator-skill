@@ -64,25 +64,86 @@ def clean_cell_content(content):
 
 
 def create_table_with_style(token, config, document_id, rows_data):
-    """创建表格并填充内容"""
+    """
+    创建表格并填充内容 - 使用 descendant API
+
+    根据飞书官方规范，使用 /descendant 端点一次性创建表格和所有单元格
+
+    关键点：
+    1. children_id 只包含直接添加到文档的块（table_id）
+    2. descendants 包含所有块的详细信息（表格、单元格、单元格内容）
+    3. 表格的 children 引用单元格的 block_id
+    4. 单元格的 children 引用内容块的 block_id
+    """
+    import uuid
+
     row_size = len(rows_data)
     col_size = len(rows_data[0]) if rows_data else 0
 
-    url = f"{config['FEISHU_API_DOMAIN']}/open-apis/docx/v1/documents/{document_id}/blocks/{document_id}/children"
-    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+    # 生成唯一的 block_id
+    table_id = f"table_{uuid.uuid4().hex[:16]}"
+
+    # 生成所有单元格和内容块的 block_id
+    cell_ids = []
+    cell_content_ids = []
+    for i in range(row_size * col_size):
+        cell_ids.append(f"cell_{uuid.uuid4().hex[:16]}")
+        cell_content_ids.append(f"cellcontent_{uuid.uuid4().hex[:16]}")
+
+    # 构建完整的 descendants 列表
+    descendants = []
+
+    # 1. 添加表格块
+    descendants.append({
+        "block_id": table_id,
+        "block_type": 31,
+        "table": {
+            "property": {
+                "row_size": row_size,
+                "column_size": col_size,
+                "header_row": True
+            }
+        },
+        "children": cell_ids
+    })
+
+    # 2. 添加所有单元格块和内容块
+    for row_idx, row in enumerate(rows_data):
+        for col_idx, cell_content in enumerate(row):
+            cell_index = row_idx * col_size + col_idx
+            cell_id = cell_ids[cell_index]
+            cell_content_id = cell_content_ids[cell_index]
+
+            # 清理单元格内容
+            cell_content = clean_cell_content(cell_content)
+
+            # 单元格块
+            descendants.append({
+                "block_id": cell_id,
+                "block_type": 32,
+                "table_cell": {},
+                "children": [cell_content_id]
+            })
+
+            # 单元格内容块（文本）
+            descendants.append({
+                "block_id": cell_content_id,
+                "block_type": 2,
+                "text": {
+                    "elements": [{"text_run": {"content": cell_content}}],
+                    "style": {}
+                },
+                "children": []
+            })
+
+    # 发送请求 - children_id 只包含 table_id
+    url = f"{config['FEISHU_API_DOMAIN']}/open-apis/docx/v1/documents/{document_id}/blocks/{document_id}/descendant?document_revision_id=-1"
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json; charset=utf-8"}
 
     payload = {
-        "children": [{
-            "block_type": 31,
-            "table": {
-                "property": {
-                    "row_size": row_size,
-                    "column_size": col_size,
-                    "header_row": True
-                }
-            }
-        }],
-        "index": -1
+        "index": -1,
+        "children_id": [table_id],
+        "descendants": descendants
     }
 
     response = requests.post(url, json=payload, headers=headers)
@@ -90,39 +151,6 @@ def create_table_with_style(token, config, document_id, rows_data):
 
     if result.get("code") != 0:
         raise Exception(f"创建表格失败: {result}")
-
-    table_id = result["data"]["children"][0]["block_id"]
-    cell_ids = result["data"]["children"][0].get("children", [])
-
-    # 填充单元格内容
-    for row_idx, row in enumerate(rows_data):
-        for col_idx, cell_content in enumerate(row):
-            cell_index = row_idx * col_size + col_idx
-            if cell_index < len(cell_ids):
-                cell_id = cell_ids[cell_index]
-                cell_url = f"{config['FEISHU_API_DOMAIN']}/open-apis/docx/v1/documents/{document_id}/blocks/{cell_id}/children"
-
-                cell_content = clean_cell_content(cell_content)
-                cell_payload = {
-                    "children": [{
-                        "block_type": 2,
-                        "text": {
-                            "elements": [{"text_run": {"content": cell_content}}],
-                            "style": {}
-                        }
-                    }],
-                    "index": -1
-                }
-
-                for attempt in range(3):
-                    try:
-                        resp = requests.post(cell_url, json=cell_payload, headers=headers, timeout=10)
-                        if resp.json().get("code") == 0:
-                            break
-                    except:
-                        pass
-                    time.sleep(0.1)
-        time.sleep(0.05)
 
     return table_id
 
@@ -201,7 +229,14 @@ def add_children_to_block(token, config, document_id, parent_block_id, children)
 
 
 def main():
-    """主函数"""
+    """
+    主函数 - 修复版本
+
+    修复问题：块的顺序问题
+    原因：表格单独创建（使用专门API），其他块批量添加，导致顺序混乱
+
+    解决方案：改为顺序添加，每个块（包括表格）都按顺序添加到文档末尾
+    """
     if len(sys.argv) < 3:
         print("Usage: python block_adder.py <blocks.json> <doc_info.json> [output_dir]")
         sys.exit(1)
@@ -235,36 +270,29 @@ def main():
 
     print(f"[feishu-block-adder] Document ID: {doc_id}")
     print(f"[feishu-block-adder] Total blocks: {len(blocks)}")
+    print(f"[feishu-block-adder] Mode: Sequential (逐块添加，保持顺序)")
 
-    # 分批处理
-    batch_size = 20
+    # 统计变量
     table_count = 0
     callout_count = 0
     regular_blocks = 0
     start_time = time.time()
 
-    for i in range(0, len(blocks), batch_size):
-        batch = blocks[i:i+batch_size]
-        valid_blocks = []
-
-        for block in batch:
+    # ========== 修复：改为顺序添加，保持块的原始顺序 ==========
+    # 每个块都按顺序添加到文档末尾，使用 index=-1
+    for i, block in enumerate(blocks):
+        try:
             if block.get("type") == "table":
-                try:
-                    print(f"  Creating table {table_count + 1} with {len(block['data'])} rows")
-                    create_table_with_style(token, config, doc_id, block["data"])
-                    table_count += 1
-                    print(f"  [OK] Table {table_count} created")
-                except Exception as e:
-                    print(f"  [FAIL] Table failed: {str(e)[:80]}")
+                # 表格块：使用专门的创建函数
+                print(f"  [{i+1}/{len(blocks)}] Creating table with {len(block['data'])} rows...")
+                create_table_with_style(token, config, doc_id, block["data"])
+                table_count += 1
+                print(f"  [OK] Table created")
             else:
+                # 其他块：添加到文档末尾
                 block_copy = {k: v for k, v in block.items() if k != "type"}
+
                 # 支持的块类型：25 种飞书文档块
-                # 文本块：text (2), heading1-9 (3-11)
-                # 列表：bullet (12), ordered (13), todo (17)
-                # 特殊：code (14), quote (15), callout (19), divider (22)
-                # 媒体：image (27)
-                # 高级：quote_container (34), task (35)
-                # callout (19) 现在直接包含 elements 和 style，可以批量添加
                 if block_copy.get("block_type") in [
                     2, 3, 4, 5, 6, 7, 8, 9, 10, 11,  # text, heading1-9
                     12, 13, 17,                             # bullet, ordered, todo
@@ -272,19 +300,24 @@ def main():
                     27,                                     # image
                     34, 35                                  # quote_container, task
                 ]:
-                    valid_blocks.append(block_copy)
+                    add_children_to_block(token, config, doc_id, doc_id, [block_copy])
                     if block_copy.get("block_type") == 19:
                         callout_count += 1
                     regular_blocks += 1
 
-        if valid_blocks:
-            try:
-                add_children_to_block(token, config, doc_id, doc_id, valid_blocks)
-            except Exception as e:
-                print(f"  [FAIL] Batch failed: {str(e)[:80]}")
+                    block_type = block_copy.get("block_type", "unknown")
+                    type_name = {
+                        2: "文本", 3: "H1", 4: "H2", 5: "H3", 6: "H4",
+                        12: "列表", 13: "有序列表", 14: "代码", 15: "引用",
+                        17: "待办", 19: "高亮", 22: "分割线", 27: "图片"
+                    }.get(block_type, f"类型{block_type}")
+                    print(f"  [{i+1}/{len(blocks)}] Added {type_name}")
 
-        print(f"Processed {min(i+batch_size, len(blocks))}/{len(blocks)} blocks")
-        time.sleep(0.2)
+        except Exception as e:
+            print(f"  [{i+1}/{len(blocks)}] FAIL: {str(e)[:80]}")
+
+        # 控制请求速率，避免触发限流
+        time.sleep(0.05)
 
     duration = time.time() - start_time
 
@@ -296,7 +329,7 @@ def main():
         "tables_created": table_count,
         "callouts_created": callout_count,
         "regular_blocks": regular_blocks,
-        "batches": (len(blocks) + batch_size - 1) // batch_size,
+        "mode": "sequential",  # 新增：标识使用顺序模式
         "duration_seconds": round(duration, 2),
         "completed_at": datetime.now().isoformat()
     }

@@ -52,9 +52,24 @@ def run_step(name, script, args):
 def main():
     """主函数"""
     if len(sys.argv) < 2:
-        print("用法: python orchestrator.py <markdown文件> [文档标题] [workflow目录]")
-        print("示例: python orchestrator.py input.md \"我的文档\"")
-        print("      python orchestrator.py input.md")
+        print("用法: python orchestrator.py <markdown文件> [文档标题] [运行名称]")
+        print()
+        print("参数说明:")
+        print("  markdown文件  - 要转换的 Markdown 文件路径")
+        print("  文档标题      - 飞书文档标题（可选，默认使用文件名）")
+        print("  运行名称      - 本次运行的文件夹名称（可选，默认使用时间戳）")
+        print()
+        print("示例:")
+        print("  python orchestrator.py input.md")
+        print("  python orchestrator.py input.md \"我的文档\"")
+        print("  python orchestrator.py input.md \"我的文档\" \"test-run-01\"")
+        print()
+        print("工作流目录结构:")
+        print("  workflow/run-2026-02-10-143022/")
+        print("  ├── step1_parse/")
+        print("  ├── step2_create_with_permission/")
+        print("  ├── step3_add_blocks/")
+        print("  └── step4_verify/")
         sys.exit(1)
 
     md_file = Path(sys.argv[1])
@@ -68,23 +83,36 @@ def main():
     else:
         doc_title = md_file.stem  # 使用文件名作为标题
 
-    # 工作流目录
+    # 运行名称（用于创建独立子文件夹）
     if len(sys.argv) >= 4:
-        workflow_dir = Path(sys.argv[3])
+        run_name = sys.argv[3]
     else:
-        workflow_dir = Path("workflow")
+        # 默认使用时间戳：run-YYYY-MM-DD-HHMMSS
+        run_name = datetime.now().strftime("run-%Y-%m-%d-%H%M%S")
+
+    # 工作流基础目录（在项目根目录下）
+    project_root = Path(__file__).parent.parent.parent.parent  # 上升到项目根目录
+    workflow_base_dir = project_root / "workflow" / "feishu-doc-runs"
+
+    # 本次运行的工作流目录
+    workflow_dir = workflow_base_dir / run_name
 
     # 输出目录（日志文件保存位置）
-    output_dir = Path(__file__).parent.parent  # 主技能根目录（而不是scripts子目录）
+    output_dir = project_root / "workflow" / "feishu-logs"
 
     print("="*70)
     print("Feishu Document Creation - Orchestrator Workflow (5 Steps)")
     print("="*70)
     print(f"输入文件: {md_file}")
     print(f"文档标题: {doc_title}")
+    print(f"运行名称: {run_name}")
     print(f"工作流目录: {workflow_dir}")
-    print(f"输出目录: {output_dir}")
+    print(f"日志目录: {output_dir}")
     print()
+
+    # 确保工作流目录和输出目录存在
+    workflow_base_dir.mkdir(parents=True, exist_ok=True)
+    output_dir.mkdir(parents=True, exist_ok=True)
 
     # 创建工作流目录
     step_dirs = {
@@ -170,6 +198,7 @@ def main():
     print("="*70)
     print(f"文档 URL: {doc_url}")
     print(f"耗时: {duration:.2f} 秒")
+    print(f"运行目录: {workflow_dir}")
     print()
     print("权限状态:")
     print(f"  协作者添加: {'[OK]' if permission.get('collaborator_added') else '[FAIL]'}")
@@ -180,11 +209,14 @@ def main():
     print(f"  - {output_dir / 'CREATED_DOCS.md'}")
     print(f"  - {output_dir / 'created_docs.json'}")
     print()
-    print("工作流文件:")
+    print("本次运行工作流文件:")
     print(f"  - {workflow_dir / 'step1_parse/blocks.json'}")
     print(f"  - {workflow_dir / 'step2_create_with_permission/doc_with_permission.json'}")
     print(f"  - {workflow_dir / 'step3_add_blocks/add_result.json'}")
     print(f"  - {workflow_dir / 'step4_verify/verify_result.json'}")
+    print()
+    print(f"[提示] 所有工作流数据保存在: {workflow_base_dir}")
+    print(f"[提示] 日志文件保存在: {output_dir}")
 
 
 if __name__ == "__main__":

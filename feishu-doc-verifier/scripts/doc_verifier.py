@@ -9,6 +9,7 @@
 import sys
 import json
 import re
+import time
 from pathlib import Path
 from datetime import datetime
 
@@ -75,22 +76,104 @@ def main():
 
     # 使用 Playwright 验证
     print("\n[feishu-doc-verifier] Starting Playwright verification...")
+
+    # 获取项目根目录，用于存储登录状态
+    project_root = Path(__file__).parent.parent.parent.parent.parent
+    playwright_state_dir = project_root / ".claude" / "playwright_state"
+
+    # 检查是否已有登录状态
+    state_file = playwright_state_dir / "state.json"
+    has_login_state = state_file.exists()
+
+    # 如果没有登录状态，使用非无头模式让用户扫码
+    headless = has_login_state
+
+    if not has_login_state:
+        print("=" * 70)
+        print("[INFO] 首次运行，需要登录飞书账号")
+        print("[INFO] 浏览器将自动打开，请使用飞书APP扫码登录")
+        print("[INFO] 登录成功后，状态将被保存，后续无需重复登录")
+        print("=" * 70)
+        print()
+
     try:
         from playwright.sync_api import sync_playwright
 
-        # 使用持久化上下文
-        user_data_dir = Path(__file__).parent.parent.parent.parent / "skills" / "feishu-doc-creator" / "playwright_data"
+        playwright_state_dir.mkdir(parents=True, exist_ok=True)
 
         with sync_playwright() as p:
+            # 使用持久化上下文保存登录状态
             context = p.chromium.launch_persistent_context(
-                user_data_dir=str(user_data_dir),
-                headless=True
+                user_data_dir=str(playwright_state_dir),
+                headless=headless,
+                # 设置更长的超时时间
+                timeout=120000  # 2分钟
             )
-            page = context.new_page()
+
+            # 获取或创建页面
+            if context.pages:
+                page = context.pages[0]
+            else:
+                page = context.new_page()
 
             # 访问文档
-            page.goto(doc_url)
-            page.wait_for_timeout(5000)
+            page.goto(doc_url, timeout=60000, wait_until="domcontentloaded")
+
+            # 等待页面稳定
+            page.wait_for_timeout(2000)
+
+            # 检测是否需要登录
+            needs_login = False
+            if not has_login_state:
+                # 检测页面是否包含登录相关元素
+                try:
+                    # 检查页面标题 - 如果已经是文档标题，说明已登录
+                    page_title = page.title()
+                    if "飞书" in page_title or "feishu" in page_title.lower():
+                        # 可能已登录，检查是否有登录二维码
+                        has_qrcode = page.locator("canvas").count() > 0 and \
+                                    page.locator("text=扫码").count() > 0
+                        if has_qrcode:
+                            needs_login = True
+                        # 否则可能已经显示文档了
+                    else:
+                        # 检查URL是否有login相关，但有二维码才需要登录
+                        url_lower = page.url.lower()
+                        if "login" in url_lower or "accounts" in url_lower:
+                            has_qrcode = page.locator("canvas").count() > 0 or \
+                                       page.locator("text=扫码").count() > 0
+                            needs_login = has_qrcode
+                except:
+                    # 如果检测失败，保守起见假设需要登录
+                    needs_login = True
+
+            if needs_login:
+                print("[INFO] 检测到登录页面，等待用户扫码登录...")
+                print("[INFO] 请使用飞书APP扫描浏览器中的二维码...")
+                print("[INFO] 登录成功后页面将自动跳转...")
+
+                # 等待登录完成 - 检测 URL 变化或页面标题变化
+                start_time = time.time()
+                max_wait = 120  # 最多等待2分钟
+                logged_in = False
+
+                while time.time() - start_time < max_wait:
+                    try:
+                        current_url = page.url
+                        # 如果 URL 不再包含 login/auth/accounts，说明已登录
+                        if "login" not in current_url.lower() and \
+                           "auth" not in current_url.lower() and \
+                           "accounts" not in current_url.lower():
+                            logged_in = True
+                            break
+                    except:
+                        pass
+                    time.sleep(1)  # 每秒检查一次
+
+                if not logged_in:
+                    print("[WARN] 等待登录超时，尝试继续验证...")
+
+            page.wait_for_timeout(3000)  # 额外等待3秒确保页面完全加载
 
             # 获取页面信息
             page_title = page.title()
@@ -104,6 +187,14 @@ def main():
                 result["success"] = True
                 print(f"[OK] 文档验证成功 - 页面正常加载")
                 print(f"[OK] 页面标题: {page_title}")
+
+                # 如果是首次登录成功，提示用户
+                if not has_login_state:
+                    print()
+                    print("=" * 70)
+                    print("[OK] 登录成功！")
+                    print("[INFO] 登录状态已保存，后续验证将自动使用保存的登录态")
+                    print("=" * 70)
             else:
                 print(f"[WARN] 文档验证失败 - 页面可能无法正常访问")
 
@@ -111,6 +202,11 @@ def main():
             screenshot_file = output_dir / "screenshot.png"
             page.screenshot(path=str(screenshot_file))
             result["screenshot"] = str(screenshot_file)
+
+            # 保存上下文状态
+            context.storage_state(path=str(state_file))
+            if not has_login_state:
+                print(f"[INFO] 登录状态已保存到: {state_file}")
 
             context.close()
 
