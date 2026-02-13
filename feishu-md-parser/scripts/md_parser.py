@@ -307,13 +307,26 @@ def parse_markdown_to_blocks(markdown_text: str, include_first_title: bool = Fal
         if image_match:
             alt = image_match.group(1)
             url = image_match.group(2)
+            # 保存本地路径以便上传
+            local_path = None
+            # 判断是否是本地路径（相对路径或绝对路径）
+            if not url.startswith('http://') and not url.startswith('https://'):
+                # 是本地路径，尝试解析
+                md_file = sys.argv[1] if len(sys.argv) > 1 else None
+                if md_file:
+                    md_dir = Path(md_file).parent
+                    # 尝试将相对路径转换为绝对路径
+                    test_path = md_dir / url if not Path(url).is_absolute() else Path(url)
+                    if test_path.exists():
+                        local_path = str(test_path)
             blocks.append({
                 "block_type": 27,
                 "image": {
                     "token": url,
                     "width": 0,
                     "height": 0
-                }
+                },
+                "local_path": local_path  # 添加本地路径字段
             })
             metadata["image_count"] += 1
             i += 1

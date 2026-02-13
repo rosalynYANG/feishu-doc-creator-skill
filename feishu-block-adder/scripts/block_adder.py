@@ -228,6 +228,79 @@ def add_children_to_block(token, config, document_id, parent_block_id, children)
     return result
 
 
+def upload_image_file(token, config, image_block_id, image_path):
+    """
+    上传图片文件到图片块
+
+    根据飞书官方文档的三步流程：
+    1. 创建图片 Block (已完成)
+    2. 上传图片素材
+    3. 设置图片 Block 的 token
+    """
+    if not Path(image_path).exists():
+        raise Exception(f"图片文件不存在: {image_path}")
+
+    file_size = Path(image_path).stat().st_size
+    file_name = Path(image_path).name
+
+    # 正确的 API 端点
+    url = f"{config['FEISHU_API_DOMAIN']}/open-apis/drive/v1/medias/upload_all"
+
+    with open(image_path, 'rb') as f:
+        files = {
+            'file': (file_name, f, 'image/png')
+        }
+        data = {
+            'file_name': file_name,
+            'parent_type': 'docx_image',
+            'parent_node': image_block_id,
+            'size': str(file_size)
+        }
+        headers = {"Authorization": f"Bearer {token}"}
+
+        response = requests.post(url, headers=headers, files=files, data=data)
+
+        if response.status_code != 200:
+            raise Exception(f"上传图片失败: HTTP {response.status_code}\n{response.text[:500]}")
+
+        try:
+            result = response.json()
+        except Exception as e:
+            raise Exception(f"解析响应失败: {e}\n响应内容: {response.text[:500]}")
+
+        if result.get("code") != 0:
+            raise Exception(f"上传图片失败: {result}")
+
+        file_token = result["data"]["file_token"]
+        print(f"  [OK] 图片上传成功: {file_token}")
+        return file_token
+
+
+def update_image_block_token(token, config, document_id, image_block_id, file_token):
+    """
+    设置图片 Block 的素材 token
+
+    第三步：调用更新块 API，设置 replace_image 操作
+    """
+    url = f"{config['FEISHU_API_DOMAIN']}/open-apis/docx/v1/documents/{document_id}/blocks/{image_block_id}"
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+
+    payload = {
+        "replace_image": {
+            "token": file_token
+        }
+    }
+
+    response = requests.patch(url, json=payload, headers=headers)
+    result = response.json()
+
+    if result.get("code") != 0:
+        raise Exception(f"设置图片素材失败: {result}")
+
+    print(f"  [OK] 图片素材设置成功")
+    return result
+
+
 def main():
     """
     主函数 - 修复版本
@@ -288,6 +361,37 @@ def main():
                 create_table_with_style(token, config, doc_id, block["data"])
                 table_count += 1
                 print(f"  [OK] Table created")
+            elif block.get("type") == "image" or block.get("block_type") == 27:
+                # 图片块：需要三步流程
+                # 第一步：创建空的图片块
+                print(f"  [{i+1}/{len(blocks)}] Creating image block...")
+                image_block_response = add_children_to_block(token, config, doc_id, doc_id, [{
+                    "block_type": 27,
+                    "image": {}
+                }])
+                image_block_id = image_block_response["data"]["children"][0]["block_id"]
+                print(f"  [OK] Image block created: {image_block_id}")
+
+                # 第二步：上传图片文件（如果有本地路径）
+                image_path = block.get("local_path")
+                if image_path and Path(image_path).exists():
+                    print(f"  [{i+1}/{len(blocks)}] Uploading image file: {image_path}")
+                    file_token = upload_image_file(token, config, image_block_id, image_path)
+
+                    # 第三步：设置图片 token
+                    print(f"  [{i+1}/{len(blocks)}] Setting image token...")
+                    update_image_block_token(token, config, doc_id, image_block_id, file_token)
+                    print(f"  [OK] Image upload completed")
+                else:
+                    # 没有本地文件，可能是网络图片 URL，直接设置
+                    image_url = image_data.get("url", "")
+                    if image_url:
+                        print(f"  [SKIP] Network image URL: {image_url} (not uploaded)")
+                    else:
+                        print(f"  [WARN] No valid image source found")
+
+                regular_blocks += 1
+                print(f"  [{i+1}/{len(blocks)}] Added image")
             else:
                 # 其他块：添加到文档末尾
                 block_copy = {k: v for k, v in block.items() if k != "type"}
@@ -297,7 +401,7 @@ def main():
                     2, 3, 4, 5, 6, 7, 8, 9, 10, 11,  # text, heading1-9
                     12, 13, 17,                             # bullet, ordered, todo
                     14, 15, 19, 22,                         # code, quote, callout, divider
-                    27,                                     # image
+                    27,                                     # image (created above, don't create again)
                     34, 35                                  # quote_container, task
                 ]:
                     add_children_to_block(token, config, doc_id, doc_id, [block_copy])

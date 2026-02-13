@@ -1,6 +1,6 @@
 ---
 name: feishu-md-parser
-description: Markdown解析子技能 - 将Markdown文件解析为飞书文档块格式，输出JSON文件，支持25种块类型映射。
+description: Markdown解析子技能 - 将Markdown文件解析为飞书文档块格式，输出JSON文件，支持25种块类型映射，**现在支持图片上传**。
 ---
 
 # Markdown 解析子技能
@@ -28,11 +28,12 @@ description: Markdown解析子技能 - 将Markdown文件解析为飞书文档块
 - 解析引用块
 - 解析粗体/斜体
 - 解析分割线
+- **解析图片** ⭐ 新增功能 ⭐
 
 ### 第三步：清理内容
-- 移除零宽字符（\u200b, \u200c, \u200d, \ufeff）
+- 移除零宽字符（`\u200b`, `\u200c`, `\u200d`, `\ufeff`）
 - 清理表格单元格内容
-- 处理粗体标记
+- 清理粗体标记
 
 ### 第四步：输出 JSON 文件
 将解析结果保存到 `output/blocks.json`。
@@ -51,25 +52,24 @@ description: Markdown解析子技能 - 将Markdown文件解析为飞书文档块
       }
     },
     {
-      "block_type": 31,
-      "table": {
-        "property": {
-          "row_size": 3,
-          "column_size": 2,
-          "header_row": true
-        },
-        "data": [
-          ["标题1", "标题2"],
-          ["数据1", "数据2"],
-          ["数据3", "数据4"]
-        ]
-      }
+      "block_type": 27,
+      "image": {
+        "token": "D:/path/to/image.png",
+        "width": 0,
+        "height": 0
+      },
+      "local_path": "D:\\00-work_study\\path\\to\\image.png"
     }
+  }
   ],
   "metadata": {
     "total_blocks": 50,
+    "heading_count": 10,
     "table_count": 5,
-    "heading_count": 10
+    "list_count": 3,
+    "code_count": 0,
+    "callout_count": 0,
+    "image_count": 1
   }
 }
 ```
@@ -83,7 +83,6 @@ python scripts/md_parser.py input.md output/blocks.json
 
 ### 作为子技能被调用
 ```python
-# 主技能只传递文件路径
 result = call_skill("feishu-md-parser", {
     "input_file": "path/to/markdown.md",
     "output_dir": "workflow/step1_parse"
@@ -91,57 +90,41 @@ result = call_skill("feishu-md-parser", {
 # 返回: {"blocks_file": "workflow/step1_parse/blocks.json"}
 ```
 
-## 与其他技能的协作
-- 输出给 `feishu-doc-creator` 和 `feishu-block-adder`
-- 只传递文件路径，不传递内容
+## 图片上传支持说明
 
----
+### Markdown 图片语法支持
+支持两种图片格式：
 
-## ⚠️ 重要：Callout 块的特殊处理
+1. **本地图片路径**（将上传到飞书）：
+   ```markdown
+   ![alt text](D:/absolute/path/to/image.png)
+   ```
 
-### 问题说明
-Callout（高亮块）的颜色字段必须直接放在 `callout` 对象下，不能嵌套在 `style` 中。
+2. **网络图片 URL**（仅显示链接，不上传）：
+   ```markdown
+   ![alt text](https://example.com/image.png)
+   ```
 
-### 正确格式
-```json
-{
-    "block_type": 19,
-    "callout": {
-        "elements": [{"text_run": {"content": "警告信息"}}],
-        "emoji_id": "warning",        // 直接在 callout 下
-        "background_color": 1,        // 直接在 callout 下
-        "border_color": 1,            // 直接在 callout 下
-        "text_color": 1               // 直接在 callout 下
-    }
-}
-```
+### 解析实现细节
+- 检测 `![alt](url)` 语法
+- 提取 `local_path` 字段：`D:\\00-work_study\\AIsthdy\\test-claude\\test_upload.png`
+- 如果是本地路径且文件存在，则保存到 `local_path` 字段
+- 支持的图片格式：`.png`, `.jpg`, `.jpeg`, `.gif`
 
-### 错误格式（不要使用）
-```json
-{
-    "block_type": 19,
-    "callout": {
-        "elements": [{"text_run": {"content": "警告信息"}}],
-        "style": {  // ❌ 错误：不要嵌套在 style 中
-            "emoji_id": "warning",
-            "background_color": 1,
-            "border_color": 1
-        }
-    }
-}
-```
+### 块类型参考
+| block_type | 名称 | 说明 |
+|------------|------|------|
+| 2 | text | ✅ | 普通文本 |
+| 3-8 | heading1-6 | ✅ | 一到六级标题 |
+| 12 | bullet | ✅ | 无序列表 |
+| 13 | ordered | ✅ | 有序列表 |
+| 14 | code | ✅ | 代码块 |
+| 15 | quote | ✅ | 引用块 |
+| 17 | todo | ✅ | 待办事项 |
+| 19 | callout | ✅ 高亮块 |
+| 22 | divider | ✅ | 分割线 |
+| 27 | image | ✅ | 图片块（**支持本地图片上传**） |
+| 31 | table | ✅ 表格（特殊处理） |
 
-### 代码实现
-在 `md_parser.py` 第 150-189 行使用 Python 展开操作符：
-```python
-blocks.append({
-    "block_type": 19,
-    "callout": {
-        "elements": [{"text_run": {"content": callout_text}}],
-        **style  # 使用展开操作符，将样式字段直接展开到 callout 下
-    }
-})
-```
-
-### 验证方法
-如果 API 返回的 callout 只有 `emoji_id` 而没有颜色字段，说明格式错误。详见 `TROUBLESHOOTING.md`。
+## 图片上传流程（由 feishu-block-adder 实现）
+图片块创建 → 上传文件 → 设置 token，三步自动完成
